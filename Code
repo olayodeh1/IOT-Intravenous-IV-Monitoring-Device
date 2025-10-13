@@ -1,0 +1,103 @@
+#include <WiFi.h>
+#include "HX711.h"
+#include <ESPAsyncWebServer.h>
+
+// ========== WiFi Credentials ==========
+const char* ssid = "*******";
+const char* password = "*******";
+
+// ========== HX711 Setup ==========
+#define DT  4
+#define SCK 5
+
+HX711 scale;
+
+#define OFFSET 195119
+#define SCALE  -1122.303833
+float max_weight = 0.9;  // g
+
+AsyncWebServer server(80);
+
+// ========== Determine Fill Color Based on Percent ==========
+String getFillColor(float percent) {
+  if (percent > 70) return "#00cc00";      // Green
+  else if (percent > 30) return "#ffcc00"; // Yellow
+  else return "#cc0000";                   // Red
+}
+
+// ========== Realistic IV Bag SVG ==========
+String generateSVG(float percent) {
+  int height = map((int)percent, 0, 100, 0, 160);  // Fill height max 160px
+  int y = 180 - height;
+  String fillColor = getFillColor(percent);
+
+  String svg = "<svg width='120' height='240' xmlns='http://www.w3.org/2000/svg'>"
+               "<rect x='50' y='10' width='20' height='20' fill='#ccc' stroke='black' stroke-width='2'/>"
+               "<path d='M40,30 Q60,20 80,30 L80,180 Q60,200 40,180 Z' fill='none' stroke='black' stroke-width='2'/>"
+               "<clipPath id='clipBag'><path d='M40,30 Q60,20 80,30 L80,180 Q60,200 40,180 Z'/></clipPath>"
+               "<rect x='40' y='" + String(y) + "' width='40' height='" + String(height) + "' fill='" + fillColor + "' clip-path='url(#clipBag)'/>"
+               "</svg>";
+
+  return svg;
+}
+
+// ========== HTML Web Page ==========
+String getBagHTML(float weight, float percent) {
+  String page = "<!DOCTYPE html><html><head><meta http-equiv='refresh' content='2'/>"
+                "<title>INTRAVENOUS BAG MONITOR</title>"
+                "<style>body{font-family:sans-serif;text-align:center;background:#f8f8f8;}</style></head><body>"
+                "<h1>IV Bag Monitoring</h1>"
+                "<h2>Weight: " + String(weight, 2) + "g</h2>"
+                "<h2>Level: " + String((int)percent) + "%</h2>"
+                + generateSVG(percent) +
+                "</body></html>";
+  return page;
+}
+
+// ========== Setup ==========
+void setup() {
+  Serial.begin(115200);
+
+  // Connect to WiFi
+  WiFi.begin(ssid, password);
+  Serial.print("Connecting to WiFi");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500); Serial.print(".");
+  }
+  Serial.println(" Connected!");
+  Serial.println(WiFi.localIP());
+
+  // Initialize HX711
+  scale.begin(DT, SCK);
+  scale.set_offset(OFFSET);
+  scale.set_scale(SCALE);
+
+  // Web server endpoint
+  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
+    float weight = scale.get_units(10);  // Average of 10 samples
+    if (weight < 0) weight = 0;
+
+    float percent = (weight / max_weight) * 100.0;
+    if (percent > 100) percent = 100;
+    if (percent < 0) percent = 0;
+
+    // Snap to nearest lower 10% step
+    percent = floor(percent / 10.0) * 10.0;
+
+    // Serial debug
+    Serial.print("Weight: ");
+    Serial.print(weight, 2);
+    Serial.print(" g, Percentage: ");
+    Serial.print(percent);
+    Serial.println("%");
+
+    request->send(200, "text/html", getBagHTML(weight, percent));
+  });
+
+  server.begin();
+}
+
+// ========== Loop ==========
+void loop() {
+  // Nothing here
+}
